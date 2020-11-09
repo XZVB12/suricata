@@ -17,7 +17,7 @@
 
 use std::mem::transmute;
 use crate::applayer::{AppLayerResult, AppLayerTxData};
-use crate::core;
+use crate::core::{self, sc_detect_engine_state_free};
 use crate::dcerpc::parser;
 use nom::error::ErrorKind;
 use nom::number::Endianness;
@@ -184,6 +184,15 @@ impl DCERPCTransaction {
         };
     }
 
+    pub fn free(&mut self) {
+        match self.de_state {
+            Some(state) => {
+                sc_detect_engine_state_free(state);
+            }
+            _ => {}
+        }
+    }
+
     pub fn get_req_ctxid(&self) -> u16 {
         self.ctxid
     }
@@ -198,6 +207,12 @@ impl DCERPCTransaction {
 
     pub fn get_endianness(&self) -> u8 {
         self.endianness
+    }
+}
+
+impl Drop for DCERPCTransaction {
+    fn drop(&mut self) {
+        self.free();
     }
 }
 
@@ -1018,7 +1033,7 @@ impl DCERPCState {
                     if retval == -1 {
                         return AppLayerResult::err();
                     }
-                    let tx = if let Some(mut tx) = self.get_tx_by_call_id(current_call_id, core::STREAM_TOCLIENT) {
+                    let tx = if let Some(tx) = self.get_tx_by_call_id(current_call_id, core::STREAM_TOCLIENT) {
                         tx.resp_cmd = x;
                         tx
                     } else {
@@ -1043,7 +1058,7 @@ impl DCERPCState {
                 DCERPC_TYPE_RESPONSE => {
                     let transaction = self.get_tx_by_call_id(current_call_id, core::STREAM_TOCLIENT);
                     match transaction {
-                        Some(mut tx) => {
+                        Some(tx) => {
                             tx.resp_cmd = x;
                         }
                         None => {
@@ -1127,14 +1142,18 @@ pub extern "C" fn rs_dcerpc_parse_request(
     _flow: *mut core::Flow, state: &mut DCERPCState, _pstate: *mut std::os::raw::c_void,
     input: *const u8, input_len: u32, _data: *mut std::os::raw::c_void, flags: u8,
 ) -> AppLayerResult {
-    SCLogDebug!("Handling request");
+    SCLogDebug!("Handling request: input {:p} input_len {} flags {:x} EOF {}",
+            input, input_len, flags, flags & core::STREAM_EOF != 0);
+    if flags & core::STREAM_EOF != 0 && input_len == 0 {
+        return AppLayerResult::ok();
+    }
     /* START with MIDSTREAM set: record might be starting the middle. */
     if flags & (core::STREAM_START|core::STREAM_MIDSTREAM) == (core::STREAM_START|core::STREAM_MIDSTREAM) {
         state.ts_gap = true;
     }
     if input_len > 0 && input != std::ptr::null_mut() {
         let buf = build_slice!(input, input_len as usize);
-        return state.handle_input_data(buf, flags);
+        return state.handle_input_data(buf, core::STREAM_TOSERVER);
     }
     AppLayerResult::err()
 }
@@ -1144,6 +1163,9 @@ pub extern "C" fn rs_dcerpc_parse_response(
     _flow: *mut core::Flow, state: &mut DCERPCState, _pstate: *mut std::os::raw::c_void,
     input: *const u8, input_len: u32, _data: *mut std::os::raw::c_void, flags: u8,
 ) -> AppLayerResult {
+    if flags & core::STREAM_EOF != 0 && input_len == 0 {
+        return AppLayerResult::ok();
+    }
     /* START with MIDSTREAM set: record might be starting the middle. */
     if flags & (core::STREAM_START|core::STREAM_MIDSTREAM) == (core::STREAM_START|core::STREAM_MIDSTREAM) {
         state.tc_gap = true;
@@ -1151,7 +1173,7 @@ pub extern "C" fn rs_dcerpc_parse_response(
     if input_len > 0 {
         if input != std::ptr::null_mut() {
             let buf = build_slice!(input, input_len as usize);
-            return state.handle_input_data(buf, flags);
+            return state.handle_input_data(buf, core::STREAM_TOCLIENT);
         }
     }
     AppLayerResult::err()

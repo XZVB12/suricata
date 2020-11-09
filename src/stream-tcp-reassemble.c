@@ -1043,11 +1043,10 @@ static inline uint32_t AdjustToAcked(const Packet *p,
     /* get window of data that is acked */
     if (StreamTcpInlineMode() == FALSE) {
         SCLogDebug("ssn->state %s", StreamTcpStateAsString(ssn->state));
-        if ((ssn->state < TCP_CLOSED ||
-                    (ssn->state == TCP_CLOSED &&
-                     (ssn->flags & STREAMTCP_FLAG_CLOSED_BY_RST) != 0)) &&
-                (p->flags & PKT_PSEUDO_STREAM_END))
-        {
+        if (data_len == 0 || ((ssn->state < TCP_CLOSED ||
+                                      (ssn->state == TCP_CLOSED &&
+                                              (ssn->flags & STREAMTCP_FLAG_CLOSED_BY_RST) != 0)) &&
+                                     (p->flags & PKT_PSEUDO_STREAM_END))) {
             // fall through, we use all available data
         } else {
             uint64_t last_ack_abs = STREAM_BASE_OFFSET(stream);
@@ -1058,9 +1057,10 @@ static inline uint32_t AdjustToAcked(const Packet *p,
                 /* get max absolute offset */
                 last_ack_abs += delta;
             }
+            DEBUG_VALIDATE_BUG_ON(app_progress > last_ack_abs);
 
             /* see if the buffer contains unack'd data as well */
-            if (app_progress + data_len > last_ack_abs) {
+            if (app_progress <= last_ack_abs && app_progress + data_len > last_ack_abs) {
                 uint32_t check = data_len;
                 adjusted = last_ack_abs - app_progress;
                 BUG_ON(adjusted > check);
@@ -1090,12 +1090,18 @@ static int ReassembleUpdateAppLayer (ThreadVars *tv,
     const uint8_t *mydata;
     uint32_t mydata_len;
     bool gap_ahead = false;
-    const uint8_t flags = StreamGetAppLayerFlags(ssn, *stream, p);
+    bool last_was_gap = false;
 
     while (1) {
+        const uint8_t flags = StreamGetAppLayerFlags(ssn, *stream, p);
         bool check_for_gap_ahead = ((*stream)->data_required > 0);
         gap_ahead = GetAppBuffer(*stream, &mydata, &mydata_len,
                 app_progress, check_for_gap_ahead);
+        if (last_was_gap && mydata_len == 0) {
+            break;
+        }
+        last_was_gap = false;
+
         /* make sure to only deal with ACK'd data */
         mydata_len = AdjustToAcked(p, ssn, *stream, app_progress, mydata_len);
         DEBUG_VALIDATE_BUG_ON(mydata_len > (uint32_t)INT_MAX);
@@ -1127,6 +1133,7 @@ static int ReassembleUpdateAppLayer (ThreadVars *tv,
                 return 0;
             if (no_progress_update)
                 break;
+            last_was_gap = true;
             continue;
 
         } else if (flags & STREAM_DEPTH) {
