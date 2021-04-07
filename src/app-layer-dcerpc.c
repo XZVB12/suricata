@@ -116,26 +116,36 @@ static uint64_t DCERPCGetTxCnt(void *state)
     return rs_dcerpc_get_tx_cnt(state);
 }
 
-static int DCERPCGetAlstateProgressCompletionStatus(uint8_t direction)
-{
-    return rs_dcerpc_get_alstate_progress_completion_status(direction);
-}
-
 static int DCERPCGetAlstateProgress(void *tx, uint8_t direction)
 {
     return rs_dcerpc_get_alstate_progress(tx, direction);
 }
 
+static uint16_t DCERPCTCPProbe(
+        Flow *f, uint8_t direction, const uint8_t *input, uint32_t len, uint8_t *rdir)
+{
+    SCLogDebug("DCERPCTCPProbe");
+
+    const int r = rs_dcerpc_probe_tcp(direction, input, len, rdir);
+    switch (r) {
+        case 1:
+            return ALPROTO_DCERPC;
+        case 0:
+            return ALPROTO_UNKNOWN;
+        case -1:
+        default:
+            return ALPROTO_FAILED;
+    }
+}
+
 static int DCERPCRegisterPatternsForProtocolDetection(void)
 {
-    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_DCERPC,
-                                               "|05 00|", 2, 0, STREAM_TOSERVER) < 0)
-    {
+    if (AppLayerProtoDetectPMRegisterPatternCSwPP(IPPROTO_TCP, ALPROTO_DCERPC, "|05 00|", 2, 0,
+                STREAM_TOSERVER, DCERPCTCPProbe, 0, 0) < 0) {
         return -1;
     }
-    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_DCERPC,
-                                               "|05 00|", 2, 0, STREAM_TOCLIENT) < 0)
-    {
+    if (AppLayerProtoDetectPMRegisterPatternCSwPP(IPPROTO_TCP, ALPROTO_DCERPC, "|05 00|", 2, 0,
+                STREAM_TOCLIENT, DCERPCTCPProbe, 0, 0) < 0) {
         return -1;
     }
 
@@ -178,8 +188,8 @@ void RegisterDCERPCParsers(void)
 
         AppLayerParserRegisterGetStateProgressFunc(IPPROTO_TCP, ALPROTO_DCERPC, DCERPCGetAlstateProgress);
 
-        AppLayerParserRegisterGetStateProgressCompletionStatus(ALPROTO_DCERPC,
-                                                               DCERPCGetAlstateProgressCompletionStatus);
+        AppLayerParserRegisterStateProgressCompletionStatus(ALPROTO_DCERPC, 1, 1);
+
         /* This parser accepts gaps. */
         AppLayerParserRegisterOptionFlags(IPPROTO_TCP, ALPROTO_DCERPC, APP_LAYER_PARSER_OPT_ACCEPT_GAPS);
 

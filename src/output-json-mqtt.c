@@ -1,4 +1,4 @@
-/* Copyright (C) 2020 Open Information Security Foundation
+/* Copyright (C) 2020-2021 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -50,14 +50,15 @@
 #define MQTT_DEFAULTS (MQTT_LOG_PASSWORDS)
 
 typedef struct LogMQTTFileCtx_ {
-    LogFileCtx *file_ctx;
     uint32_t    flags;
+    OutputJsonCtx *eve_ctx;
 } LogMQTTFileCtx;
 
 typedef struct LogMQTTLogThread_ {
     LogMQTTFileCtx *mqttlog_ctx;
     uint32_t        count;
     MemBuffer      *buffer;
+    LogFileCtx *file_ctx;
 } LogMQTTLogThread;
 
 bool JsonMQTTAddMetadata(const Flow *f, uint64_t tx_id, JsonBuilder *js)
@@ -85,7 +86,7 @@ static int JsonMQTTLogger(ThreadVars *tv, void *thread_data,
         dir = LOG_DIR_FLOW_TOSERVER;
     }
 
-    JsonBuilder *js = CreateEveHeader(p, dir, "mqtt", NULL);
+    JsonBuilder *js = CreateEveHeader(p, dir, "mqtt", NULL, thread->mqttlog_ctx->eve_ctx);
     if (unlikely(js == NULL)) {
         return TM_ECODE_FAILED;
     }
@@ -94,7 +95,7 @@ static int JsonMQTTLogger(ThreadVars *tv, void *thread_data,
         goto error;
 
     MemBufferReset(thread->buffer);
-    OutputJsonBuilderBuffer(js, thread->mqttlog_ctx->file_ctx, &thread->buffer);
+    OutputJsonBuilderBuffer(js, thread->mqttlog_ctx->eve_ctx->file_ctx, &thread->buffer);
     jb_free(js);
 
     return TM_ECODE_OK;
@@ -135,7 +136,7 @@ static OutputInitResult OutputMQTTLogInitSub(ConfNode *conf,
     if (unlikely(mqttlog_ctx == NULL)) {
         return result;
     }
-    mqttlog_ctx->file_ctx = ajt->file_ctx;
+    mqttlog_ctx->eve_ctx = ajt;
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(*output_ctx));
     if (unlikely(output_ctx == NULL)) {
@@ -174,6 +175,8 @@ static TmEcode JsonMQTTLogThreadInit(ThreadVars *t, const void *initdata, void *
     }
 
     thread->mqttlog_ctx = ((OutputCtx *)initdata)->data;
+    thread->file_ctx = LogFileEnsureExists(thread->mqttlog_ctx->eve_ctx->file_ctx, t->id);
+
     *data = (void *)thread;
 
     return TM_ECODE_OK;

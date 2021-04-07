@@ -259,6 +259,18 @@ pub struct DNSRDataSSHFP {
     pub fingerprint: Vec<u8>,
 }
 
+#[derive(Debug,PartialEq)]
+pub struct DNSRDataSRV {
+    /// Priority
+    pub priority: u16,
+    /// Weight
+    pub weight: u16,
+    /// Port
+    pub port: u16,
+    /// Target
+    pub target: Vec<u8>,
+}
+
 /// Represents RData of various formats
 #[derive(Debug,PartialEq)]
 pub enum DNSRData {
@@ -269,10 +281,13 @@ pub enum DNSRData {
     CNAME(Vec<u8>),
     PTR(Vec<u8>),
     MX(Vec<u8>),
+    NS(Vec<u8>),
     // RData is text
     TXT(Vec<u8>),
+    NULL(Vec<u8>),
     // RData has several fields
     SOA(DNSRDataSOA),
+    SRV(DNSRDataSRV),
     SSHFP(DNSRDataSSHFP),
     // RData for remaining types is sometimes ignored
     Unknown(Vec<u8>),
@@ -825,15 +840,6 @@ pub extern "C" fn rs_dns_parse_response_tcp(_flow: *const core::Flow,
 }
 
 #[no_mangle]
-pub extern "C" fn rs_dns_state_progress_completion_status(
-    _direction: u8)
-    -> std::os::raw::c_int
-{
-    SCLogDebug!("rs_dns_state_progress_completion_status");
-    return 1;
-}
-
-#[no_mangle]
 pub extern "C" fn rs_dns_tx_get_alstate_progress(_tx: *mut std::os::raw::c_void,
                                                  _direction: u8)
                                                  -> std::os::raw::c_int
@@ -867,6 +873,16 @@ pub extern "C" fn rs_dns_state_get_tx(state: *mut std::os::raw::c_void,
             return std::ptr::null_mut();
         }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn rs_dns_tx_is_request(tx: &mut DNSTransaction) -> bool {
+    tx.request.is_some()
+}
+
+#[no_mangle]
+pub extern "C" fn rs_dns_tx_is_response(tx: &mut DNSTransaction) -> bool {
+    tx.response.is_some()
 }
 
 #[no_mangle]
@@ -1072,7 +1088,8 @@ pub unsafe extern "C" fn rs_dns_udp_register_parser() {
         parse_tc: rs_dns_parse_response,
         get_tx_count: rs_dns_state_get_tx_count,
         get_tx: rs_dns_state_get_tx,
-        tx_get_comp_st: rs_dns_state_progress_completion_status,
+        tx_comp_st_ts: 1,
+        tx_comp_st_tc: 1,
         tx_get_progress: rs_dns_tx_get_alstate_progress,
         get_events: Some(rs_dns_state_get_events),
         get_eventinfo: Some(rs_dns_state_get_event_info),
@@ -1117,7 +1134,8 @@ pub unsafe extern "C" fn rs_dns_tcp_register_parser() {
         parse_tc: rs_dns_parse_response_tcp,
         get_tx_count: rs_dns_state_get_tx_count,
         get_tx: rs_dns_state_get_tx,
-        tx_get_comp_st: rs_dns_state_progress_completion_status,
+        tx_comp_st_ts: 1,
+        tx_comp_st_tc: 1,
         tx_get_progress: rs_dns_tx_get_alstate_progress,
         get_events: Some(rs_dns_state_get_events),
         get_eventinfo: Some(rs_dns_state_get_event_info),

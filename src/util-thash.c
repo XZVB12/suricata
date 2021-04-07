@@ -308,16 +308,16 @@ THashTableContext *THashInit(const char *cnf_prefix, size_t data_size,
     ctx->config.hash_size = hashsize > 0 ? hashsize : THASH_DEFAULT_HASHSIZE;
     /* Reset memcap in case of loading from file to the highest possible value
      unless defined by the rule keyword */
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    // limit memcap size to default when fuzzing
+    ctx->config.memcap = THASH_DEFAULT_MEMCAP;
+#else
     if (memcap > 0) {
         ctx->config.memcap = memcap;
     } else {
-#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-        // limit hash size to default when fuzzing
-        ctx->config.memcap = THASH_DEFAULT_MEMCAP;
-#else
         ctx->config.memcap = reset_memcap ? UINT64_MAX : THASH_DEFAULT_MEMCAP;
-#endif
     }
+#endif
     ctx->config.prealloc = THASH_DEFAULT_PREALLOC;
 
     SC_ATOMIC_INIT(ctx->counter);
@@ -336,7 +336,7 @@ THashTableContext *THashInit(const char *cnf_prefix, size_t data_size,
  * */
 void THashConsolidateMemcap(THashTableContext *ctx)
 {
-    ctx->config.memcap = MAX(SC_ATOMIC_GET(ctx->memuse), THASH_DEFAULT_MEMCAP);
+    ctx->config.memcap = MAX(SC_ATOMIC_GET(ctx->memuse), ctx->config.memcap);
     SCLogDebug("memcap after load set to: %" PRIu64, ctx->config.memcap);
 }
 

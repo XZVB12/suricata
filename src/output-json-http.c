@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2020 Open Information Security Foundation
+/* Copyright (C) 2007-2021 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -56,12 +56,11 @@
 #include "util-byte.h"
 
 typedef struct LogHttpFileCtx_ {
-    LogFileCtx *file_ctx;
     uint32_t flags; /** Store mode */
     uint64_t fields;/** Store fields */
     HttpXFFCfg *xff_cfg;
     HttpXFFCfg *parent_xff_cfg;
-    OutputJsonCommonSettings cfg;
+    OutputJsonCtx *eve_ctx;
 } LogHttpFileCtx;
 
 typedef struct JsonHttpLogThread_ {
@@ -411,7 +410,7 @@ void EveHttpLogJSONBodyPrintable(JsonBuilder *js, Flow *f, uint64_t tx_id)
 {
     HtpState *htp_state = (HtpState *)FlowGetAppState(f);
     if (htp_state) {
-        htp_tx_t *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, tx_id);
+        htp_tx_t *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP1, htp_state, tx_id);
         if (tx) {
             HtpTxUserData *htud = (HtpTxUserData *)htp_tx_get_user_data(tx);
             if (htud != NULL) {
@@ -434,7 +433,7 @@ static void BodyBase64Buffer(JsonBuilder *js, HtpBody *body, const char *key)
             return;
         }
 
-        unsigned long len = body_data_len * 2 + 1;
+        unsigned long len = BASE64_BUFFER_SIZE(body_data_len);
         uint8_t encoded[len];
         if (Base64Encode(body_data, body_data_len, encoded, &len) == SC_BASE64_OK) {
             jb_set_string(js, key, (char *)encoded);
@@ -446,7 +445,7 @@ void EveHttpLogJSONBodyBase64(JsonBuilder *js, Flow *f, uint64_t tx_id)
 {
     HtpState *htp_state = (HtpState *)FlowGetAppState(f);
     if (htp_state) {
-        htp_tx_t *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, tx_id);
+        htp_tx_t *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP1, htp_state, tx_id);
         if (tx) {
             HtpTxUserData *htud = (HtpTxUserData *)htp_tx_get_user_data(tx);
             if (htud != NULL) {
@@ -484,10 +483,10 @@ static int JsonHttpLogger(ThreadVars *tv, void *thread_data, const Packet *p, Fl
     htp_tx_t *tx = txptr;
     JsonHttpLogThread *jhl = (JsonHttpLogThread *)thread_data;
 
-    JsonBuilder *js = CreateEveHeaderWithTxId(p, LOG_DIR_FLOW, "http", NULL, tx_id);
+    JsonBuilder *js = CreateEveHeaderWithTxId(
+            p, LOG_DIR_FLOW, "http", NULL, tx_id, jhl->httplog_ctx->eve_ctx);
     if (unlikely(js == NULL))
         return TM_ECODE_OK;
-    EveAddCommonOptions(&jhl->httplog_ctx->cfg, p, f, js);
 
     SCLogDebug("got a HTTP request and now logging !!");
 
@@ -529,7 +528,7 @@ bool EveHttpAddMetadata(const Flow *f, uint64_t tx_id, JsonBuilder *js)
 {
     HtpState *htp_state = (HtpState *)FlowGetAppState(f);
     if (htp_state) {
-        htp_tx_t *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, tx_id);
+        htp_tx_t *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP1, htp_state, tx_id);
 
         if (tx) {
             EveHttpLogJSONBasic(js, tx);
@@ -567,9 +566,8 @@ static OutputInitResult OutputHttpLogInitSub(ConfNode *conf, OutputCtx *parent_c
         return result;
     }
 
-    http_ctx->file_ctx = ojc->file_ctx;
     http_ctx->flags = LOG_HTTP_DEFAULT;
-    http_ctx->cfg = ojc->cfg;
+    http_ctx->eve_ctx = ojc;
 
     if (conf) {
         const char *extended = ConfNodeLookupChildValue(conf, "extended");
@@ -629,7 +627,7 @@ static OutputInitResult OutputHttpLogInitSub(ConfNode *conf, OutputCtx *parent_c
     output_ctx->DeInit = OutputHttpLogDeinitSub;
 
     /* enable the logger for the app layer */
-    AppLayerParserRegisterLogger(IPPROTO_TCP, ALPROTO_HTTP);
+    AppLayerParserRegisterLogger(IPPROTO_TCP, ALPROTO_HTTP1);
 
     result.ctx = output_ctx;
     result.ok = true;
@@ -656,7 +654,7 @@ static TmEcode JsonHttpLogThreadInit(ThreadVars *t, const void *initdata, void *
         goto error_exit;
     }
 
-    aft->file_ctx = LogFileEnsureExists(aft->httplog_ctx->file_ctx, t->id);
+    aft->file_ctx = LogFileEnsureExists(aft->httplog_ctx->eve_ctx->file_ctx, t->id);
     if (!aft->file_ctx) {
         goto error_exit;
     }
@@ -690,7 +688,7 @@ static TmEcode JsonHttpLogThreadDeinit(ThreadVars *t, void *data)
 void JsonHttpLogRegister (void)
 {
     /* register as child of eve-log */
-    OutputRegisterTxSubModule(LOGGER_JSON_HTTP, "eve-log", "JsonHttpLog",
-        "eve-log.http", OutputHttpLogInitSub, ALPROTO_HTTP, JsonHttpLogger,
-        JsonHttpLogThreadInit, JsonHttpLogThreadDeinit, NULL);
+    OutputRegisterTxSubModule(LOGGER_JSON_HTTP, "eve-log", "JsonHttpLog", "eve-log.http",
+            OutputHttpLogInitSub, ALPROTO_HTTP1, JsonHttpLogger, JsonHttpLogThreadInit,
+            JsonHttpLogThreadDeinit, NULL);
 }
